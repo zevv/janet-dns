@@ -7,25 +7,37 @@
   (print ""))
 
 (def qtype {
-    "A" 1 "NS" 2 "CNAME" 5 "SOA" 6 "PTR" 12 "MX" 15 "TXT" 16 "AAAA" 28 "SRV" 33 "OPT" 41 "AXFR" 252 "ANY" 255 
-    1 "A" 2 "NS" 5 "CNAME" 6 "SOA" 12 "PTR" 15 "MX" 16 "TXT" 28 "AAAA" 33 "SRV" 41 "OPT" 252 "AXFR" 255 "ANY"})
+    :A 1 :NS 2 :CNAME 5 :SOA 6 :PTR 12 :MX 15 :TXT 16 :AAAA 28 :SRV 33 :OPT 41 :AXFR 252 :ANY 255 
+    1 :A 2 :NS 5 :CNAME 6 :SOA 12 :PTR 15 :MX 16 :TXT 28 :AAAA 33 :SRV 41 :OPT 252 :AXFR 255 :ANY})
 
-(def qclass {
-  "IN" 1 "CS" 2 "CH" 3 "HS" 4 "ANY" 255})
+(def qclass { :IN 1 :CS 2 :CH 3 :HS 4 :ANY 255 1 :IN 2 :CS 3 :CH 4 :HS 255 :ANY})
 
-(defn unpack [buf off & vs]
+(varfn decode-name [buf off] 0)
+
+(defn unpack [buf off & ks]
   (var off off)
   (def result @[])
-  (each v vs
-    (def [len v]
-      (case v
-        :u8 [1 (get buf off)]
-        :u16 [2 (+ (blshift (get buf (+ off 1))  0) (blshift (get buf (+ off 0))  8))]
-        :u32 [4 (+ (blshift (get buf (+ off 3))  0) (blshift (get buf (+ off 2))  8)
-                   (blshift (get buf (+ off 1)) 16) (blshift (get buf (+ off 0)) 24))]))
-    (set off (+ off len))
+  (each k ks
+    (def [off-next v]
+      (case k
+        :name (decode-name buf off)
+        :u8 [(+ off 1) (get buf off)]
+        :u16 (do (def [off v1 v2] (unpack buf off :u8 :u8))
+                 [off (+ (blshift v1 8) v2)])
+        :u32 (do (def [off v1 v2] (unpack buf off :u16 :u16))
+                 [off (+ (blshift v1 16) v2)])
+        :A (do (def [off & vs] (unpack buf off :u8 :u8 :u8 :u8))
+               [off (string/format "%d.%d.%d.%d" ;vs)])
+        :AAAA (do (def [off & vs] (unpack buf off :u16 :u16 :u16 :u16 :u16 :u16 :u16 :u16))
+                  [off (string/format "%x:%x:%x:%x:%x:%x:%x:%x" ;vs)])
+        :MX (do (def [off pref name] (unpack buf off :u16 :name))
+                [off { :preference pref :name name} ])
+        :NS (unpack buf off :name)
+        :PTR (unpack buf off :name)
+        ))
+    (set off off-next)
     (array/push result v))
-  [off result])
+  [off ;result])
 
 (defn push-name [buf name]
   (def parts (string/split "." name))
@@ -51,8 +63,8 @@
   (push-u16 buf 0)
   (each q questions
     (push-name buf (get q :name))
-    (push-u16 buf (qtype (get q :type)))
-    (push-u16 buf (qclass (get q :class))))
+    (push-u16 buf (qtype (q :type)))
+    (push-u16 buf (qclass (q :class))))
   buf)
 
 (defn is-compressed? [len]
@@ -60,76 +72,59 @@
 
 (varfn decode-name-aux [buf off parts] 0)
 
+# Decode label part; length prefixed followed by data
 (defn decode-part-label [buf off len parts]
   (def off-next (+ off len))
   (array/push parts (slice buf off off-next))
   (decode-name-aux buf off-next parts))
 
+# Decode compressed part; 0x0c followed by a pointer to the name
 (defn decode-part-compressed [buf off len parts]
-  (def [off [ptr]] (unpack buf off :u8))
+  (def [off ptr] (unpack buf off :u8))
   (decode-name-aux buf ptr parts)
   off)
 
 (varfn decode-name-aux [buf off parts]
-  (def [off [len]] (unpack buf off :u8))
+  (def [off len] (unpack buf off :u8))
   (if (> len 0)
     (if (is-compressed? len)
       (decode-part-compressed buf off len parts)
       (decode-part-label buf off len parts))
     off))
                       
-(defn decode-name [buf off]
+(varfn decode-name [buf off]
   (def parts @[])
   (def off (decode-name-aux buf off parts))
   [off (string/join parts ".")])
 
+(defn decode-data [buf off len type]
+  (unpack buf off type))
+
 (defn decode-question [buf off]
-  (def [off name] (decode-name buf off))
-  (def [off [type class]] (unpack buf off :u16 :u16))
+  (def [off name type class] (unpack buf off :name :u16 :u16))
   [off {:name name :type (qtype type) :class (qclass class)}])
 
-(defn decode-data [buf off len type]
-  (case type
-    "A" (do
-          (def [off [v1 v2 v3 v4]] (unpack buf off :u8 :u8 :u8 :u8))
-          [off (string/format "%d.%d.%d.%d" v1 v2 v3 v4)]
-          )
-    "AAAA" (do
-          (def [off [v1 v2 v3 v4 v5 v6 v7 v8]] (unpack buf off :u16 :u16 :u16 :u16 :u16 :u16 :u16 :u16))
-          [off (string/format "%x:%x:%x:%x:%x:%x:%x:%x" v1 v2 v3 v4 v5 v6 v7 v8)]
-          )
-    "MX" (do
-          (def [off [pref]] (unpack buf off :u16))
-          (def [off name] (decode-name buf off))
-          [off { :preference pref :name name} ])
-    (slice buf off (+ off len))
-  ))
-
 (defn decode-answer [buf off]
-  (def [off name] (decode-name buf off))
-  (def [off [type class ttl len ]] (unpack buf off :u16 :u16 :u32 :u16))
-  (def [type class] [(qtype type) (qclass class)])
-  (def [off data] (decode-data buf off len type))
-  [off {:name name :type type :class class :ttl ttl :data data}])
+  (def [off name type class ttl len] (unpack buf off :name :u16 :u16 :u32 :u16))
+  (def [off data] (decode-data buf off len (qtype type)))
+  [off {:name name :type (qtype type) :class (qclass class) :ttl ttl :data data}])
 
 (defn decode-questions [buf off nquestions questions]
   (if (> nquestions 0)
     (do (def [off question] (decode-question buf off))
-        (array/push questions question)
-        (decode-questions buf off (dec nquestions) questions))
+        (decode-questions buf off (dec nquestions) [question; questions]))
     [off questions]))
 
 (defn decode-answers [buf off nanswers answers]
   (if (> nanswers 0)
     (do (def [off answer] (decode-answer buf off))
-        (array/push answers answer)
-        (decode-answers buf off (dec nanswers) answers))
+        (decode-answers buf off (dec nanswers) [answer; answers]))
     [off answers]))
 
 
 (defn dns-decode [buf]
-  #(hexdump buf)
-  (def [off [id flags nquestions nanswers]] (unpack buf 0 :u16 :u16 :u16 :u16 :u16 :u16))
+  (hexdump buf)
+  (def [off id flags nquestions nanswers] (unpack buf 0 :u16 :u16 :u16 :u16 :u16 :u16))
   (def [off questions] (decode-questions buf off nquestions @[]))
   (def [off answers] (decode-answers buf off nanswers @[]))
   {:id id :flags flags :questions questions :answers answers})
@@ -138,11 +133,15 @@
   (def sock (net/connect "8.8.4.4" "53" :datagram))
   (def query-pkt {
             :id 0x1234 
-            :questions [ { :name name :type type :class "IN" } ] 
+            :questions [ { :name name :type type :class :IN } ] 
             :answers []
           })
   (net/write sock (dns-encode query-pkt))
   (dns-decode (net/read sock 4096)))
 
 
-(pp (resolve "A" "bbc.com"))
+(def resp (resolve :A "nu"))
+(print "")
+(each q (get resp :questions) (pp q))
+(print "")
+(each a (get resp :answers) (pp a))
