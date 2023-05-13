@@ -8,9 +8,9 @@ happy path and has virtually no error handling.
 ## Description
 
 Address resolution is a complicated task that is usually performed by the libc
-standard library using `getaddrinfo()` or similar calls; the Janet standard
-library also uses this call for resolving when calling `net/address`. This can
-be problematic because the `getaddrinfo()` can potentially block for several
+standard library using `getaddrinfo()` or similar calls. The Janet standard
+library also uses this call for resolving when calling `net/address`; this can
+be problematic because `getaddrinfo()` can potentially block for several
 seconds, effectively blocking the current Janet thread and it's event loop as
 well.
 
@@ -27,7 +27,7 @@ file.
 
 ## Example
 
-```
+```janet
 (import ./resolver)
 
 # Create resolver instance
@@ -48,8 +48,9 @@ file.
 
 ## TODO and Open questions
 
-- Timeout and error handling
-- Acquire DNS server IPs from system resolver
-- Cache resceived answers with the proper TTL
-- TCP/53
+- Improve timeout and error handling
+- Acquire DNS server IPs from system resolver configuration
+- Cache resceived answers with proper time-to-live
+- Implement TCP/53
+- Primary/secondary server fallback
 
