@@ -1,11 +1,4 @@
 
-(defn hexdump [buf]
-  (for i 0 (length buf)
-    (if (= 0 (band i 0xf))
-      (prinf "\n%04x: " i))
-    (prinf "%02x " (get buf i)))
-  (print ""))
-
 (def qtype {
     :A 1 :NS 2 :CNAME 5 :SOA 6 :PTR 12 :MX 15 :TXT 16 :AAAA 28 :SRV 33 :OPT 41 :AXFR 252 :ANY 255
     1 :A 2 :NS 5 :CNAME 6 :SOA 12 :PTR 15 :MX 16 :TXT 28 :AAAA 33 :SRV 41 :OPT 252 :AXFR 255 :ANY})
@@ -15,10 +8,8 @@
 (varfn decode-name [buf off parts] 0)
 
 (defn push-name [buf name]
-  (def parts (string/split "." name))
-  (each part parts
-    (def len (length part))
-    (buffer/push-byte buf len)
+  (each part (string/split "." name)
+    (buffer/push-byte buf (length part))
     (buffer/push buf part))
   (buffer/push-byte buf 0))
 
@@ -49,7 +40,6 @@
           :u16 (qclass (q :class))))
   buf)
 
-
 (defn unpack [buf off & ks]
   (var off off)
   (def result @[])
@@ -69,9 +59,11 @@
         :AAAA (do (def [off & vs] (unpack buf off :u16 :u16 :u16 :u16 :u16 :u16 :u16 :u16))
                   [off (string/format "%x:%x:%x:%x:%x:%x:%x:%x" ;vs)])
         :MX (do (def [off pref name] (unpack buf off :u16 :name))
-                [off { :preference pref :name name} ])
+                [off { :preference pref :name name}])
         :NS (unpack buf off :name)
         :PTR (unpack buf off :name)
+        :TXT (do (def [off len] (unpack buf off :u8))
+                 [(+ off len) (slice buf off (+ off len))])
         ))
     (set off off-next)
     (array/push result v))
@@ -110,24 +102,16 @@
   (def [off data] (decode-data buf off len (qtype type)))
   [off {:name name :type (qtype type) :class (qclass class) :ttl ttl :data data}])
 
-(defn decode-questions [buf off nquestions questions]
-  (if (> nquestions 0)
-    (do (def [off question] (decode-question buf off))
-        (decode-questions buf off (dec nquestions) [question; questions]))
-    [off questions]))
-
-(defn decode-answers [buf off nanswers answers]
-  (if (> nanswers 0)
-    (do (def [off answer] (decode-answer buf off))
-        (decode-answers buf off (dec nanswers) [answer; answers]))
-    [off answers]))
-
+(defn decode-list [buf off decoder count vs]
+  (if (> count 0)
+    (do (def [off v] (decoder buf off))
+        (decode-list buf off decoder (dec count) [v; vs]))
+    [off vs]))
 
 (defn dns-decode [buf]
-  (hexdump buf)
   (def [off id flags nquestions nanswers] (unpack buf 0 :u16 :u16 :u16 :u16 :u16 :u16))
-  (def [off questions] (decode-questions buf off nquestions @[]))
-  (def [off answers] (decode-answers buf off nanswers @[]))
+  (def [off questions] (decode-list buf off decode-question nquestions @[]))
+  (def [off answers] (decode-list buf off decode-answer nanswers @[]))
   {:id id :flags flags :questions questions :answers answers})
 
 (defn resolve [type name]
@@ -140,9 +124,7 @@
   (net/write sock (dns-encode query-pkt))
   (dns-decode (net/read sock 4096)))
 
-
-(def resp (resolve :A "nu.nl"))
-(print "")
-(each q (resp :questions) (pp q))
-(print "")
-(each a (resp :answers) (pp a))
+(each type [:A :AAAA :MX :TXT] (do
+  (def resp (resolve type "nyt.com"))
+  (each a (resp :answers) 
+    (printf "%s %q" (a :type) (a :data)))))
