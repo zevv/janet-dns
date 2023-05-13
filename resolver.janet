@@ -124,7 +124,6 @@
   (def [off answers] (decode-list buf off decode-answer nanswers @[]))
   {:id id :flags flags :questions questions :answers answers})
 
-
 # :resolve method implementation; sends a DNS query and yields until the
 # response is received.
 
@@ -147,7 +146,6 @@
   (put (self :requests) (self :id) req)
   (yield))
 
-
 # Worker fiber reads responses and resumes request fibers
 
 (defn- resolve_worker [resolver]
@@ -160,7 +158,6 @@
     (ev/go (req :fiber) result)
     (put (resolver :requests) (rsp :id) nil)
     (resolve_worker resolver))))
-
 
 # Create new resolver instance
 
