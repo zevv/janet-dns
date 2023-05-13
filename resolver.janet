@@ -127,7 +127,7 @@
 # :resolve method implementation; sends a DNS query and yields until the
 # response is received.
 
-(defn- fn_resolve [self name &opt type]
+(defn- fn-resolve [self name &opt type]
   (default type :A)
   (update self :id inc)
   # Send request to DNS server
@@ -146,17 +146,21 @@
   (put (self :requests) (self :id) req)
   (yield))
 
+(defn- fn-stop [self]
+  (net/close (self :sock)))
+
 # Worker fiber reads responses and resumes request fibers
 
 (defn- resolve_worker [resolver]
   (def rxbuf @"")
   (def data (net/read (resolver :sock) 512 rxbuf))
-  (def rsp (dns-decode data))
-  (def req (get (resolver :requests) (rsp :id)))
-  (if req (do
-    (def result (map (fn [ans] (ans :data)) (rsp :answers)))
-    (ev/go (req :fiber) result)
-    (put (resolver :requests) (rsp :id) nil)
+  (if data (do
+    (def rsp (dns-decode data))
+    (def req (get (resolver :requests) (rsp :id)))
+    (if req (do
+      (def result (map (fn [ans] (ans :data)) (rsp :answers)))
+      (ev/go (req :fiber) result)
+      (put (resolver :requests) (rsp :id) nil)))
     (resolve_worker resolver))))
 
 # Create new resolver instance
@@ -164,7 +168,8 @@
 (defn new [server]
   (def resolver @{
      # methods
-     :resolve fn_resolve
+     :resolve fn-resolve
+     :stop fn-stop
      # data
      :sock (net/connect server "53" :datagram)
      :requests @{}
