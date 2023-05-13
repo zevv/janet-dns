@@ -54,16 +54,6 @@
                  [off (+ (blshift v1 8) v2)])
         :u32 (do (def [off v1 v2] (unpack buf off :u16 :u16))
                  [off (+ (blshift v1 16) v2)])
-        :A (do (def [off & vs] (unpack buf off :u8 :u8 :u8 :u8))
-               [off (string/format "%d.%d.%d.%d" ;vs)])
-        :AAAA (do (def [off & vs] (unpack buf off :u16 :u16 :u16 :u16 :u16 :u16 :u16 :u16))
-                  [off (string/format "%x:%x:%x:%x:%x:%x:%x:%x" ;vs)])
-        :MX (do (def [off pref name] (unpack buf off :u16 :name))
-                [off { :preference pref :name name}])
-        :NS (unpack buf off :name)
-        :PTR (unpack buf off :name)
-        :TXT (do (def [off len] (unpack buf off :u8))
-                 [(+ off len) (slice buf off (+ off len))])
         ))
     (set off off-next)
     (array/push result v))
@@ -91,7 +81,17 @@
     off))
 
 (defn decode-data [buf off len type]
-  (unpack buf off type))
+  (case type
+    :A (do (def [off & vs] (unpack buf off :u8 :u8 :u8 :u8))
+         [off (string/format "%d.%d.%d.%d" ;vs)])
+    :AAAA (do (def [off & vs] (unpack buf off :u16 :u16 :u16 :u16 :u16 :u16 :u16 :u16))
+            [off (string/format "%x:%x:%x:%x:%x:%x:%x:%x" ;vs)])
+    :MX (do (def [off pref name] (unpack buf off :u16 :name))
+          [off { :preference pref :name name}])
+    :NS (unpack buf off :name)
+    :PTR (unpack buf off :name)
+    :TXT (do (def [off len] (unpack buf off :u8))
+           [(+ off len) (slice buf off (+ off len))])))
 
 (defn decode-question [buf off]
   (def [off name type class] (unpack buf off :name :u16 :u16))
@@ -124,7 +124,66 @@
   (net/write sock (dns-encode query-pkt))
   (dns-decode (net/read sock 4096)))
 
-(each type [:A :AAAA :MX :TXT] (do
-  (def resp (resolve type "nyt.com"))
-  (each a (resp :answers) 
-    (printf "%s %q" (a :type) (a :data)))))
+#(each type [:A :AAAA :MX :TXT] (do
+#  (def resp (resolve type "nyt.com"))
+#  (each a (resp :answers) 
+#    (printf "%s %q" (a :type) (a :data)))))
+
+
+
+(defn fn_resolve [self name]
+  (update self :id inc)
+  # Send request to DNS server
+  (def query-pkt {
+            :id (self :id)
+            :questions [ { :name name :type :A :class :IN } ]
+            :answers []
+          })
+  (net/write (self :sock) (dns-encode query-pkt))
+  # Store request and yield
+  (def req @{
+     :id (self :id)
+     :time (os/time)
+     :fiber (fiber/current)
+  })
+  (put (self :requests) (self :id) req)
+  (yield))
+
+
+# Worker fiber reads responses and resumes request fibers
+(defn resolve_worker [resolver]
+  (def data (net/read (resolver :sock) 4096))
+  (def rsp (dns-decode data))
+  (def req (get (resolver :requests) (rsp :id)))
+  (def [ans & rest] (rsp :answers))
+  (ev/go (req :fiber) (ans :data))
+  (resolve_worker resolver))
+
+# Create new resolver
+(defn new_resolver [server]
+  (def resolver @{
+     # methods
+     :resolve fn_resolve
+     # data
+     :sock (net/connect server "53" :datagram)
+     :requests @{}
+     :id 0
+  })
+  (ev/call resolve_worker resolver)
+  resolver)
+  
+
+
+# Main code: create resolver and resolve a bit
+
+(def res (new_resolver "8.8.4.4"))
+
+(defn test[]
+  (ev/sleep 0.1)
+  (pp (:resolve res "nyt.com"))
+  (ev/sleep 0.1)
+  (pp (:resolve res "google.com")))
+
+
+(ev/call test)
+
