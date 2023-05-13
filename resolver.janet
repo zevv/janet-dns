@@ -7,24 +7,24 @@
 
 (varfn decode-name [buf off parts] 0)
 
-(defn push-name [buf name]
+(defn- push-name [buf name]
   (each part (string/split "." name)
     (buffer/push-byte buf (length part))
     (buffer/push buf part))
   (buffer/push-byte buf 0))
 
-(defn push-u16 [buffer v]
+(defn- push-u16 [buffer v]
   (buffer/push-byte buffer (band (brshift v 8) 0xff))
   (buffer/push-byte buffer (band (brshift v 0) 0xff)))
 
-(defn pack [buf & kvs]
+(defn- pack [buf & kvs]
   (each [k v] (partition 2 kvs)
     (case k
       :name (push-name buf v)
       :u16 (push-u16 buf v)
       )))
 
-(defn dns-encode [pkt]
+(defn- dns-encode [pkt]
   (def buf @"")
   (pack buf
         :u16 (pkt :id)
@@ -40,7 +40,7 @@
           :u16 (qclass (q :class))))
   buf)
 
-(defn unpack [buf off & ks]
+(defn- unpack [buf off & ks]
   (var off off)
   (def result @[])
   (each k ks
@@ -59,17 +59,17 @@
     (array/push result v))
   [off ;result])
 
-(defn decode-part-label [buf off len parts]
+(defn- decode-part-label [buf off len parts]
   (def off-next (+ off len))
   (array/push parts (slice buf off off-next))
   (decode-name buf off-next parts))
 
-(defn decode-part-compressed [buf off len parts]
+(defn- decode-part-compressed [buf off len parts]
   (def [off ptr] (unpack buf off :u8))
   (decode-name buf ptr parts)
   off)
 
-(defn is-compressed? [len]
+(defn- is-compressed? [len]
   (= 0xc0 (band 0xc0 len)))
 
 (varfn decode-name [buf off parts]
@@ -80,7 +80,7 @@
       (decode-part-label buf off len parts))
     off))
 
-(defn decode-data [buf off len type]
+(defn- decode-data [buf off len type]
   (case type
     :A (do (def [off & vs] (unpack buf off :u8 :u8 :u8 :u8))
          [off (string/format "%d.%d.%d.%d" ;vs)])
@@ -93,28 +93,28 @@
     :TXT (do (def [off len] (unpack buf off :u8))
            [(+ off len) (slice buf off (+ off len))])))
 
-(defn decode-question [buf off]
+(defn- decode-question [buf off]
   (def [off name type class] (unpack buf off :name :u16 :u16))
   [off {:name name :type (qtype type) :class (qclass class)}])
 
-(defn decode-answer [buf off]
+(defn- decode-answer [buf off]
   (def [off name type class ttl len] (unpack buf off :name :u16 :u16 :u32 :u16))
   (def [off data] (decode-data buf off len (qtype type)))
   [off {:name name :type (qtype type) :class (qclass class) :ttl ttl :data data}])
 
-(defn decode-list [buf off decoder count vs]
+(defn- decode-list [buf off decoder count vs]
   (if (> count 0)
     (do (def [off v] (decoder buf off))
         (decode-list buf off decoder (dec count) [v; vs]))
     [off vs]))
 
-(defn dns-decode [buf]
+(defn- dns-decode [buf]
   (def [off id flags nquestions nanswers] (unpack buf 0 :u16 :u16 :u16 :u16 :u16 :u16))
   (def [off questions] (decode-list buf off decode-question nquestions @[]))
   (def [off answers] (decode-list buf off decode-answer nanswers @[]))
   {:id id :flags flags :questions questions :answers answers})
 
-(defn resolve [type name]
+(defn- resolve [type name]
   (def sock (net/connect "8.8.4.4" "53" :datagram))
   (def query-pkt {
             :id 0x1234
@@ -131,12 +131,13 @@
 
 
 
-(defn fn_resolve [self name]
+(defn- fn_resolve [self name &opt type]
+  (default type :A)
   (update self :id inc)
   # Send request to DNS server
   (def query-pkt {
             :id (self :id)
-            :questions [ { :name name :type :A :class :IN } ]
+            :questions [ { :name name :type type :class :IN } ]
             :answers []
           })
   (net/write (self :sock) (dns-encode query-pkt))
@@ -151,16 +152,18 @@
 
 
 # Worker fiber reads responses and resumes request fibers
-(defn resolve_worker [resolver]
+(defn- resolve_worker [resolver]
   (def data (net/read (resolver :sock) 4096))
   (def rsp (dns-decode data))
   (def req (get (resolver :requests) (rsp :id)))
-  (def [ans & rest] (rsp :answers))
-  (ev/go (req :fiber) (ans :data))
-  (resolve_worker resolver))
+  (if req (do
+    (def result (map (fn [ans] (ans :data)) (rsp :answers)))
+    (ev/go (req :fiber) result)
+    (put (resolver :requests) (rsp :id) nil)
+    (resolve_worker resolver))))
 
 # Create new resolver
-(defn new_resolver [server]
+(defn new [server]
   (def resolver @{
      # methods
      :resolve fn_resolve
@@ -172,18 +175,4 @@
   (ev/call resolve_worker resolver)
   resolver)
   
-
-
-# Main code: create resolver and resolve a bit
-
-(def res (new_resolver "8.8.4.4"))
-
-(defn test[]
-  (ev/sleep 0.1)
-  (pp (:resolve res "nyt.com"))
-  (ev/sleep 0.1)
-  (pp (:resolve res "google.com")))
-
-
-(ev/call test)
 
