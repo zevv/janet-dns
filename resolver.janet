@@ -1,4 +1,5 @@
 
+# Two way mapping of DNS query types and classes to their numeric values
 (def qtype {
     :A 1 :NS 2 :CNAME 5 :SOA 6 :PTR 12 :MX 15 :TXT 16 :AAAA 28 :SRV 33 :OPT 41 :AXFR 252 :ANY 255
     1 :A 2 :NS 5 :CNAME 6 :SOA 12 :PTR 15 :MX 16 :TXT 28 :AAAA 33 :SRV 41 :OPT 252 :AXFR 255 :ANY})
@@ -6,6 +7,8 @@
 (def qclass { :IN 1 :CS 2 :CH 3 :HS 4 :ANY 255 1 :IN 2 :CS 3 :CH 4 :HS 255 :ANY})
 
 (varfn decode-name [buf off parts] 0)
+
+# Encoding
 
 (defn- push-name [buf name]
   (each part (string/split "." name)
@@ -40,6 +43,8 @@
           :u16 (qclass (q :class))))
   buf)
 
+# Decoding
+
 (defn- unpack [buf off & ks]
   (var off off)
   (def result @[])
@@ -59,6 +64,9 @@
     (array/push result v))
   [off ;result])
 
+# Decode a DNS name, which is a sequence of labels, each of which is a length,
+# also handling name compression.
+ 
 (defn- decode-part-label [buf off len parts]
   (def off-next (+ off len))
   (array/push parts (slice buf off off-next))
@@ -79,6 +87,8 @@
       (decode-part-compressed buf off len parts)
       (decode-part-label buf off len parts))
     off))
+
+# Decode payload data depending on the type of the question or answer
 
 (defn- decode-data [buf off len type]
   (case type
@@ -114,22 +124,9 @@
   (def [off answers] (decode-list buf off decode-answer nanswers @[]))
   {:id id :flags flags :questions questions :answers answers})
 
-(defn- resolve [type name]
-  (def sock (net/connect "8.8.4.4" "53" :datagram))
-  (def query-pkt {
-            :id 0x1234
-            :questions [ { :name name :type type :class :IN } ]
-            :answers []
-          })
-  (net/write sock (dns-encode query-pkt))
-  (dns-decode (net/read sock 4096)))
 
-#(each type [:A :AAAA :MX :TXT] (do
-#  (def resp (resolve type "nyt.com"))
-#  (each a (resp :answers) 
-#    (printf "%s %q" (a :type) (a :data)))))
-
-
+# :resolve method implementation; sends a DNS query and yields until the
+# response is received.
 
 (defn- fn_resolve [self name &opt type]
   (default type :A)
@@ -152,6 +149,7 @@
 
 
 # Worker fiber reads responses and resumes request fibers
+
 (defn- resolve_worker [resolver]
   (def data (net/read (resolver :sock) 4096))
   (def rsp (dns-decode data))
@@ -162,7 +160,9 @@
     (put (resolver :requests) (rsp :id) nil)
     (resolve_worker resolver))))
 
-# Create new resolver
+
+# Create new resolver instance
+
 (defn new [server]
   (def resolver @{
      # methods
