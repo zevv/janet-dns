@@ -151,7 +151,8 @@
 # Worker fiber reads responses and resumes request fibers
 
 (defn- resolve_worker [resolver]
-  (def data (net/read (resolver :sock) 4096))
+  (def rxbuf @"")
+  (def data (net/read (resolver :sock) 512 rxbuf))
   (def rsp (dns-decode data))
   (def req (get (resolver :requests) (rsp :id)))
   (if req (do

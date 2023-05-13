@@ -51,4 +51,5 @@ file.
 - Timeout and error handling
 - Acquire DNS server IPs from system resolver
 - Cache resceived answers with the proper TTL
+- TCP/53
 
