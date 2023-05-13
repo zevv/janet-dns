@@ -7,12 +7,48 @@
   (print ""))
 
 (def qtype {
-    :A 1 :NS 2 :CNAME 5 :SOA 6 :PTR 12 :MX 15 :TXT 16 :AAAA 28 :SRV 33 :OPT 41 :AXFR 252 :ANY 255 
+    :A 1 :NS 2 :CNAME 5 :SOA 6 :PTR 12 :MX 15 :TXT 16 :AAAA 28 :SRV 33 :OPT 41 :AXFR 252 :ANY 255
     1 :A 2 :NS 5 :CNAME 6 :SOA 12 :PTR 15 :MX 16 :TXT 28 :AAAA 33 :SRV 41 :OPT 252 :AXFR 255 :ANY})
 
 (def qclass { :IN 1 :CS 2 :CH 3 :HS 4 :ANY 255 1 :IN 2 :CS 3 :CH 4 :HS 255 :ANY})
 
-(varfn decode-name [buf off] 0)
+(varfn decode-name [buf off parts] 0)
+
+(defn push-name [buf name]
+  (def parts (string/split "." name))
+  (each part parts
+    (def len (length part))
+    (buffer/push-byte buf len)
+    (buffer/push buf part))
+  (buffer/push-byte buf 0))
+
+(defn push-u16 [buffer v]
+  (buffer/push-byte buffer (band (brshift v 8) 0xff))
+  (buffer/push-byte buffer (band (brshift v 0) 0xff)))
+
+(defn pack [buf & kvs]
+  (each [k v] (partition 2 kvs)
+    (case k
+      :name (push-name buf v)
+      :u16 (push-u16 buf v)
+      )))
+
+(defn dns-encode [pkt]
+  (def buf @"")
+  (pack buf
+        :u16 (pkt :id)
+        :u16 0x0100 # flags
+        :u16 (length (pkt :questions))
+        :u16 (length (pkt :answers))
+        :u16 0  # authority RRs
+        :u16 0) # additional RRs
+  (each q (pkt :questions)
+    (pack buf
+          :name (q :name)
+          :u16 (qtype (q :type))
+          :u16 (qclass (q :class))))
+  buf)
+
 
 (defn unpack [buf off & ks]
   (var off off)
@@ -20,7 +56,9 @@
   (each k ks
     (def [off-next v]
       (case k
-        :name (decode-name buf off)
+        :name (do (def parts @[])
+                  (def off (decode-name buf off parts))
+                  [off (string/join parts ".")])
         :u8 [(+ off 1) (get buf off)]
         :u16 (do (def [off v1 v2] (unpack buf off :u8 :u8))
                  [off (+ (blshift v1 8) v2)])
@@ -39,63 +77,26 @@
     (array/push result v))
   [off ;result])
 
-(defn push-name [buf name]
-  (def parts (string/split "." name))
-  (each part parts
-    (def len (length part))
-    (buffer/push-byte buf len)
-    (buffer/push buf part))
-  (buffer/push-byte buf 0))
+(defn decode-part-label [buf off len parts]
+  (def off-next (+ off len))
+  (array/push parts (slice buf off off-next))
+  (decode-name buf off-next parts))
 
-(defn push-u16 [buffer v]
-  (buffer/push-byte buffer (band (brshift v 8) 0xff))
-  (buffer/push-byte buffer (band (brshift v 0) 0xff)))
-
-(defn dns-encode [pkt]
-  (def questions (get pkt :questions))
-  (def answers (get pkt :answers))
-  (def buf @"")
-  (push-u16 buf (get pkt :id))
-  (push-u16 buf 0x0100)
-  (push-u16 buf (length questions))
-  (push-u16 buf (length answers))
-  (push-u16 buf 0)
-  (push-u16 buf 0)
-  (each q questions
-    (push-name buf (get q :name))
-    (push-u16 buf (qtype (q :type)))
-    (push-u16 buf (qclass (q :class))))
-  buf)
+(defn decode-part-compressed [buf off len parts]
+  (def [off ptr] (unpack buf off :u8))
+  (decode-name buf ptr parts)
+  off)
 
 (defn is-compressed? [len]
   (= 0xc0 (band 0xc0 len)))
 
-(varfn decode-name-aux [buf off parts] 0)
-
-# Decode label part; length prefixed followed by data
-(defn decode-part-label [buf off len parts]
-  (def off-next (+ off len))
-  (array/push parts (slice buf off off-next))
-  (decode-name-aux buf off-next parts))
-
-# Decode compressed part; 0x0c followed by a pointer to the name
-(defn decode-part-compressed [buf off len parts]
-  (def [off ptr] (unpack buf off :u8))
-  (decode-name-aux buf ptr parts)
-  off)
-
-(varfn decode-name-aux [buf off parts]
+(varfn decode-name [buf off parts]
   (def [off len] (unpack buf off :u8))
   (if (> len 0)
     (if (is-compressed? len)
       (decode-part-compressed buf off len parts)
       (decode-part-label buf off len parts))
     off))
-                      
-(varfn decode-name [buf off]
-  (def parts @[])
-  (def off (decode-name-aux buf off parts))
-  [off (string/join parts ".")])
 
 (defn decode-data [buf off len type]
   (unpack buf off type))
@@ -132,16 +133,16 @@
 (defn resolve [type name]
   (def sock (net/connect "8.8.4.4" "53" :datagram))
   (def query-pkt {
-            :id 0x1234 
-            :questions [ { :name name :type type :class :IN } ] 
+            :id 0x1234
+            :questions [ { :name name :type type :class :IN } ]
             :answers []
           })
   (net/write sock (dns-encode query-pkt))
   (dns-decode (net/read sock 4096)))
 
 
-(def resp (resolve :A "nu"))
+(def resp (resolve :A "nu.nl"))
 (print "")
-(each q (get resp :questions) (pp q))
+(each q (resp :questions) (pp q))
 (print "")
-(each a (get resp :answers) (pp a))
+(each a (resp :answers) (pp a))
