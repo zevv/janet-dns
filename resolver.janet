@@ -118,10 +118,10 @@
   {:name name :type (qtype type) :class (qclass class) :ttl ttl :data data})
 
 (defn- decode-list [unpack decoder count vs]
-  (if (> count 0)
-    (do (def v (decoder unpack))
-        (decode-list unpack decoder (dec count) [v; vs]))
-    vs))
+  (def result @[])
+  (repeat count
+    (array/push result (decoder unpack)))
+  result)
 
 (defn- dns-decode [buf]
   (def unpack (unpacker buf))
