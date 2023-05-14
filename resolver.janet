@@ -1,6 +1,6 @@
 
-# Two way mapping of DNS query types to their numeric values
-(def- qtype {
+# Two way mapping of DNS query qtypes to their numeric values
+(def- qtype-map {
     :A 1 :NS 2 :CNAME 5 :SOA 6 :PTR 12 :MX 15 :TXT 16 :AAAA 28 :SRV 33 :OPT 41 :AXFR 252 :ANY 255
     1 :A 2 :NS 5 :CNAME 6 :SOA 12 :PTR 15 :MX 16 :TXT 28 :AAAA 33 :SRV 41 :OPT 252 :AXFR 255 :ANY})
 
@@ -29,7 +29,7 @@
             :u16 0) # additional RRs
   (each q (pkt :questions)
     (pack buf :name (q :name)
-              :u16 (qtype (q :type))
+              :u16 (qtype-map (q :qtype))
               :u16 0x0001)) # IN class
   buf)
 
@@ -87,10 +87,10 @@
       (decode-part-label buf off len parts))
     off))
 
-# Decode payload data depending on the type of the question or answer
+# Decode payload data depending on the qtype of the question or answer
 
-(defn- decode-data [unpack len type]
-  (case type
+(defn- decode-data [unpack len qtype]
+  (case qtype
     :A (string/format "%d.%d.%d.%d" ;(unpack :u8 :u8 :u8 :u8))
     :AAAA (string/format "%x:%x:%x:%x:%x:%x:%x:%x" ;(unpack :u16 :u16 :u16 :u16 :u16 :u16 :u16 :u16))
     :MX (unpack :u16 :name)
@@ -100,13 +100,13 @@
    ))
 
 (defn- decode-question [unpack]
-  (def [name type class] (unpack :name :u16 :u16))
-  {:name name :type (qtype type)})
+  (def [name qtype class] (unpack :name :u16 :u16))
+  {:name name :qtype (qtype-map qtype)})
 
 (defn- decode-answer [unpack]
-  (def [name type class ttl len] (unpack :name :u16 :u16 :u32 :u16))
-  (def data (decode-data unpack len (qtype type)))
-  {:name name :type (qtype type) :ttl ttl :data data})
+  (def [name qtype class ttl len] (unpack :name :u16 :u16 :u32 :u16))
+  (def data (decode-data unpack len (qtype-map qtype)))
+  {:name name :qtype (qtype-map qtype) :ttl ttl :data data})
 
 (defn- decode-list [unpack decoder count]
   (def vs @[])
@@ -123,13 +123,13 @@
 # :resolve method implementation; sends a DNS query and yields until the
 # response is received.
 
-(defn- fn-resolve [self name &opt type]
-  (default type :A)
+(defn- fn-resolve [self name &opt qtype]
+  (default qtype :A)
   (update self :id inc)
   # Send request to DNS server
   (def query-pkt {
             :id (self :id)
-            :questions [ { :name name :type type } ]
+            :questions [ { :name name :qtype qtype } ]
             :answers []
           })
   (net/write (self :sock) (dns-encode query-pkt))
