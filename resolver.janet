@@ -106,7 +106,6 @@
     :NS (unpack :name)
     :PTR (unpack :name)
     :TXT (let [[len] (unpack :u8) [txt] (unpack len)] txt)
-    :TXT "aap"
    ))
 
 (defn- decode-question [unpack]
