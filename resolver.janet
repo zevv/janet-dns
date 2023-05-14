@@ -33,32 +33,33 @@
               :u16 0x0001)) # IN class
   buf)
 
-# Decoding
+# Unpacking of binary data
 
-(defn- unpack-aux [buf off & ks]
+(defn- unpack-at [buf off & ks]
   (var off off)
   (def result @[])
   (each k ks
     (def [off-next v]
       (match k
-        :name (do (def parts @[])
-                  (def off (decode-name buf off parts))
+        :name (let [parts @[] off (decode-name buf off parts)]
                   [off (string/join parts ".")])
-        :u8 [(+ off 1) (get buf off)]
-        :u16 (do (def [off v1 v2] (unpack-aux buf off :u8 :u8))
-                 [off (+ (blshift v1 8) v2)])
-        :u32 (do (def [off v1 v2] (unpack-aux buf off :u16 :u16))
-                 [off (+ (blshift v1 16) v2)])
+        :u8 [(inc off) (get buf off)]
+        :u16 (let [[off v1 v2] (unpack-at buf off :u8 :u8)]
+               [off (+ (blshift v1 8) v2)])
+        :u32 (let [[off v1 v2] (unpack-at buf off :u16 :u16)]
+               [off (+ (blshift v1 16) v2)])
         n [(+ off n) (slice buf off (+ off n))]
         ))
     (set off off-next)
     (array/push result v))
   [off ;result])
 
+# Little unpack helper to keep track of buffer and offset
+
 (defn- unpacker [buf]
   (var off 0)
   (fn [& ks]
-    (def [off-next & vs] (unpack-aux buf off ;ks))
+    (def [off-next & vs] (unpack-at buf off ;ks))
     (set off off-next)
     vs))
 
@@ -71,7 +72,7 @@
   (decode-name buf off-next parts))
 
 (defn- decode-part-compressed [buf off len parts]
-  (def [off ptr] (unpack-aux buf off :u8))
+  (def [off ptr] (unpack-at buf off :u8))
   (decode-name buf ptr parts)
   off)
 
@@ -79,7 +80,7 @@
   (= 0xc0 (band 0xc0 len)))
 
 (varfn decode-name [buf off parts]
-  (def [off len] (unpack-aux buf off :u8))
+  (def [off len] (unpack-at buf off :u8))
   (if (> len 0)
     (if (is-compressed? len)
       (decode-part-compressed buf off len parts)
@@ -132,7 +133,7 @@
             :answers []
           })
   (net/write (self :sock) (dns-encode query-pkt))
-  # Store request and yield
+  # Store request and yield. The fiber will be resumed when an answer is received.
   (def req @{
      :id (self :id)
      :time (os/time)
@@ -147,11 +148,9 @@
 # Worker fiber reads responses and resumes request fibers
 
 (defn- resolve_worker [resolver]
-  (def rxbuf @"")
-  (def data (net/read (resolver :sock) 512 rxbuf))
-  (if data (do
-    (def rsp (dns-decode data))
-    (def req (get (resolver :requests) (rsp :id)))
+  (if-let [data (net/read (resolver :sock) 512)]
+    (let [rsp (dns-decode data)
+          req (get (resolver :requests) (rsp :id))]
     (if req (do
       (def result (map (fn [ans] (ans :data)) (rsp :answers)))
       (ev/go (req :fiber) result)
