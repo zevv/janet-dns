@@ -1,10 +1,8 @@
 
-# Two way mapping of DNS query types and classes to their numeric values
+# Two way mapping of DNS query types to their numeric values
 (def- qtype {
     :A 1 :NS 2 :CNAME 5 :SOA 6 :PTR 12 :MX 15 :TXT 16 :AAAA 28 :SRV 33 :OPT 41 :AXFR 252 :ANY 255
     1 :A 2 :NS 5 :CNAME 6 :SOA 12 :PTR 15 :MX 16 :TXT 28 :AAAA 33 :SRV 41 :OPT 252 :AXFR 255 :ANY})
-
-(def- qclass { :IN 1 :CS 2 :CH 3 :HS 4 :ANY 255 1 :IN 2 :CS 3 :CH 4 :HS 255 :ANY})
 
 (varfn decode-name [buf off parts] 0)
 
@@ -32,7 +30,7 @@
   (each q (pkt :questions)
     (pack buf :name (q :name)
               :u16 (qtype (q :type))
-              :u16 (qclass (q :class))))
+              :u16 0x0001)) # IN class
   buf)
 
 # Decoding
@@ -102,12 +100,12 @@
 
 (defn- decode-question [unpack]
   (def [name type class] (unpack :name :u16 :u16))
-  {:name name :type (qtype type) :class (qclass class)})
+  {:name name :type (qtype type)})
 
 (defn- decode-answer [unpack]
   (def [name type class ttl len] (unpack :name :u16 :u16 :u32 :u16))
   (def data (decode-data unpack len (qtype type)))
-  {:name name :type (qtype type) :class (qclass class) :ttl ttl :data data})
+  {:name name :type (qtype type) :ttl ttl :data data})
 
 (defn- decode-list [unpack decoder count]
   (def vs @[])
@@ -130,7 +128,7 @@
   # Send request to DNS server
   (def query-pkt {
             :id (self :id)
-            :questions [ { :name name :type type :class :IN } ]
+            :questions [ { :name name :type type } ]
             :answers []
           })
   (net/write (self :sock) (dns-encode query-pkt))
