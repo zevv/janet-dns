@@ -4,7 +4,7 @@
 
 # Main code: create resolver and resolve a bit
 
-(def res (resolver/new "8.8.4.3"))
+(def res (resolver/new "8.8.4.4"))
 
 (defn test[]
   (pp (:resolve res "nyt.com"))
