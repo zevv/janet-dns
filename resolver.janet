@@ -117,17 +117,16 @@
   (def data (decode-data unpack len (qtype type)))
   {:name name :type (qtype type) :class (qclass class) :ttl ttl :data data})
 
-(defn- decode-list [unpack decoder count vs]
-  (def result @[])
-  (repeat count
-    (array/push result (decoder unpack)))
-  result)
+(defn- decode-list [unpack decoder count]
+  (def vs @[])
+  (repeat count (array/push vs (decoder unpack)))
+  vs)
 
 (defn- dns-decode [buf]
   (def unpack (unpacker buf))
   (def [id flags nquestions nanswers] (unpack :u16 :u16 :u16 :u16 :u16 :u16))
-  (def questions (decode-list unpack decode-question nquestions @[]))
-  (def answers (decode-list unpack decode-answer nanswers @[]))
+  (def questions (decode-list unpack decode-question nquestions))
+  (def answers (decode-list unpack decode-answer nanswers))
   {:id id :flags flags :questions questions :answers answers})
 
 # :resolve method implementation; sends a DNS query and yields until the
