@@ -10,37 +10,29 @@
 
 # Encoding
 
-(defn- push-name [buf name]
-  (each part (string/split "." name)
-    (buffer/push-byte buf (length part))
-    (buffer/push buf part))
-  (buffer/push-byte buf 0))
-
-(defn- push-u16 [buffer v]
-  (buffer/push-byte buffer (band (brshift v 8) 0xff))
-  (buffer/push-byte buffer (band (brshift v 0) 0xff)))
-
 (defn- pack [buf & kvs]
   (each [k v] (partition 2 kvs)
-    (case k
-      :name (push-name buf v)
-      :u16 (push-u16 buf v)
+    (match k
+      :u8 (buffer/push-byte buf v)
+      :u16 (pack buf :u8 (brshift v 8) :u8 (band v 0xff))
+      :string (buffer/push buf v)
+      :name (do (each part (string/split "." v)
+                (pack buf :u8 (length part) :string part))
+              (pack buf :u8 0))
       )))
 
 (defn- dns-encode [pkt]
   (def buf @"")
-  (pack buf
-        :u16 (pkt :id)
-        :u16 0x0100 # flags
-        :u16 (length (pkt :questions))
-        :u16 (length (pkt :answers))
-        :u16 0  # authority RRs
-        :u16 0) # additional RRs
+  (pack buf :u16 (pkt :id)
+            :u16 0x0100 # flags
+            :u16 (length (pkt :questions))
+            :u16 (length (pkt :answers))
+            :u16 0  # authority RRs
+            :u16 0) # additional RRs
   (each q (pkt :questions)
-    (pack buf
-          :name (q :name)
-          :u16 (qtype (q :type))
-          :u16 (qclass (q :class))))
+    (pack buf :name (q :name)
+              :u16 (qtype (q :type))
+              :u16 (qclass (q :class))))
   buf)
 
 # Decoding
