@@ -128,21 +128,14 @@
   (default timeout 3.0)
   (update self :id inc)
   # Send request to DNS server
-  (def query-pkt {
-            :id (self :id)
-            :questions [ { :name name :qtype qtype } ]
-            :answers []
-          })
-  (net/write (self :sock) (dns-encode query-pkt))
-  # Store request and yield. The fiber will be resumed when an answer is received.
-  (def this (fiber/current))
-  (def req @{
-     :id (self :id)
-     :fiber this
-     :timeout (ev/go (fn [] (protect (do (ev/sleep timeout) (ev/go this :timeout)))))
-  })
-  (put (self :requests) (self :id) req)
-  (yield))
+  (let [ query-pkt { :id (self :id) :questions [ { :name name :qtype qtype } ] :answers [] }]
+    (net/write (self :sock) (dns-encode query-pkt)))
+  # Store request and yield. DNS answer or timeout will resume the fiber.
+  (let [this (fiber/current)
+        timeout-fn (fn [] (protect (do (ev/sleep timeout) (ev/go this :timeout))))
+        req @{ :fiber this :timeout (ev/go timeout-fn) }]
+    (put (self :requests) (self :id) req)
+    (yield)))
 
 (defn- fn-stop [self]
   (net/close (self :sock)))
