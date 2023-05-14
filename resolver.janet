@@ -45,24 +45,32 @@
 
 # Decoding
 
-(defn- unpack [buf off & ks]
+(defn- unpack-aux [buf off & ks]
   (var off off)
   (def result @[])
   (each k ks
     (def [off-next v]
-      (case k
+      (match k
         :name (do (def parts @[])
                   (def off (decode-name buf off parts))
                   [off (string/join parts ".")])
         :u8 [(+ off 1) (get buf off)]
-        :u16 (do (def [off v1 v2] (unpack buf off :u8 :u8))
+        :u16 (do (def [off v1 v2] (unpack-aux buf off :u8 :u8))
                  [off (+ (blshift v1 8) v2)])
-        :u32 (do (def [off v1 v2] (unpack buf off :u16 :u16))
+        :u32 (do (def [off v1 v2] (unpack-aux buf off :u16 :u16))
                  [off (+ (blshift v1 16) v2)])
+        n [(+ off n) (slice buf off (+ off n))]
         ))
     (set off off-next)
     (array/push result v))
   [off ;result])
+
+(defn- unpacker [buf]
+  (var off 0)
+  (fn [& ks]
+    (def [off-next & vs] (unpack-aux buf off ;ks))
+    (set off off-next)
+    vs))
 
 # Decode a DNS name, which is a sequence of labels, each of which is a length,
 # also handling name compression.
@@ -73,7 +81,7 @@
   (decode-name buf off-next parts))
 
 (defn- decode-part-compressed [buf off len parts]
-  (def [off ptr] (unpack buf off :u8))
+  (def [off ptr] (unpack-aux buf off :u8))
   (decode-name buf ptr parts)
   off)
 
@@ -81,7 +89,7 @@
   (= 0xc0 (band 0xc0 len)))
 
 (varfn decode-name [buf off parts]
-  (def [off len] (unpack buf off :u8))
+  (def [off len] (unpack-aux buf off :u8))
   (if (> len 0)
     (if (is-compressed? len)
       (decode-part-compressed buf off len parts)
@@ -90,38 +98,37 @@
 
 # Decode payload data depending on the type of the question or answer
 
-(defn- decode-data [buf off len type]
+(defn- decode-data [unpack len type]
   (case type
-    :A (do (def [off & vs] (unpack buf off :u8 :u8 :u8 :u8))
-         [off (string/format "%d.%d.%d.%d" ;vs)])
-    :AAAA (do (def [off & vs] (unpack buf off :u16 :u16 :u16 :u16 :u16 :u16 :u16 :u16))
-            [off (string/format "%x:%x:%x:%x:%x:%x:%x:%x" ;vs)])
-    :MX (do (def [off pref name] (unpack buf off :u16 :name))
-          [off { :preference pref :name name}])
-    :NS (unpack buf off :name)
-    :PTR (unpack buf off :name)
-    :TXT (do (def [off len] (unpack buf off :u8))
-           [(+ off len) (slice buf off (+ off len))])))
+    :A (string/format "%d.%d.%d.%d" ;(unpack :u8 :u8 :u8 :u8))
+    :AAAA (string/format "%x:%x:%x:%x:%x:%x:%x:%x" ;(unpack :u16 :u16 :u16 :u16 :u16 :u16 :u16 :u16))
+    :MX (unpack :u16 :name)
+    :NS (unpack :name)
+    :PTR (unpack :name)
+    :TXT (let [[len] (unpack :u8) [txt] (unpack len)] txt)
+    :TXT "aap"
+   ))
 
-(defn- decode-question [buf off]
-  (def [off name type class] (unpack buf off :name :u16 :u16))
-  [off {:name name :type (qtype type) :class (qclass class)}])
+(defn- decode-question [unpack]
+  (def [name type class] (unpack :name :u16 :u16))
+  {:name name :type (qtype type) :class (qclass class)})
 
-(defn- decode-answer [buf off]
-  (def [off name type class ttl len] (unpack buf off :name :u16 :u16 :u32 :u16))
-  (def [off data] (decode-data buf off len (qtype type)))
-  [off {:name name :type (qtype type) :class (qclass class) :ttl ttl :data data}])
+(defn- decode-answer [unpack]
+  (def [name type class ttl len] (unpack :name :u16 :u16 :u32 :u16))
+  (def data (decode-data unpack len (qtype type)))
+  {:name name :type (qtype type) :class (qclass class) :ttl ttl :data data})
 
-(defn- decode-list [buf off decoder count vs]
+(defn- decode-list [unpack decoder count vs]
   (if (> count 0)
-    (do (def [off v] (decoder buf off))
-        (decode-list buf off decoder (dec count) [v; vs]))
-    [off vs]))
+    (do (def v (decoder unpack))
+        (decode-list unpack decoder (dec count) [v; vs]))
+    vs))
 
 (defn- dns-decode [buf]
-  (def [off id flags nquestions nanswers] (unpack buf 0 :u16 :u16 :u16 :u16 :u16 :u16))
-  (def [off questions] (decode-list buf off decode-question nquestions @[]))
-  (def [off answers] (decode-list buf off decode-answer nanswers @[]))
+  (def unpack (unpacker buf))
+  (def [id flags nquestions nanswers] (unpack :u16 :u16 :u16 :u16 :u16 :u16))
+  (def questions (decode-list unpack decode-question nquestions @[]))
+  (def answers (decode-list unpack decode-answer nanswers @[]))
   {:id id :flags flags :questions questions :answers answers})
 
 # :resolve method implementation; sends a DNS query and yields until the

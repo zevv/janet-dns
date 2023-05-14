@@ -9,6 +9,7 @@
 (defn test[]
   (pp (:resolve res "nyt.com"))
   (pp (:resolve res "google.com" :AAAA))
+  (pp (:resolve res "zevv.nl" :TXT))
   (:stop res))
 
 
