@@ -123,8 +123,9 @@
 # :resolve method implementation; sends a DNS query and yields until the
 # response is received.
 
-(defn- fn-resolve [self name &opt qtype]
+(defn- fn-resolve [self name &opt qtype timeout]
   (default qtype :A)
+  (default timeout 3.0)
   (update self :id inc)
   # Send request to DNS server
   (def query-pkt {
@@ -134,10 +135,11 @@
           })
   (net/write (self :sock) (dns-encode query-pkt))
   # Store request and yield. The fiber will be resumed when an answer is received.
+  (def this (fiber/current))
   (def req @{
      :id (self :id)
-     :time (os/time)
-     :fiber (fiber/current)
+     :fiber this
+     :timeout (ev/go (fn [] (protect (do (ev/sleep timeout) (ev/go this :timeout)))))
   })
   (put (self :requests) (self :id) req)
   (yield))
@@ -152,6 +154,7 @@
     (let [rsp (dns-decode data)
           req (get (resolver :requests) (rsp :id))]
     (if req (do
+      (ev/cancel (req :timeout) nil)
       (def result (map (fn [ans] (ans :data)) (rsp :answers)))
       (ev/go (req :fiber) result)
       (put (resolver :requests) (rsp :id) nil)))

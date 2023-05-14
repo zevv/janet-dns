@@ -48,7 +48,7 @@ file.
 
 ## TODO and Open questions
 
-- Improve timeout and error handling
+- Improve error handling
 - Acquire DNS server IPs from system resolver configuration
 - Cache resceived answers with proper time-to-live
 - Implement TCP/53
